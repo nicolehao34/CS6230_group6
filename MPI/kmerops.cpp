@@ -143,17 +143,10 @@ std::unique_ptr<KmerList> count_kmer_mpi(const DnaBuffer& myreads) {
     KmerHashmapHandler handler(&local_kmer_map);
     ForeachKmer(myreads, handler);
 
-    // DEBUG print local k-mer count before distribution
-    printf("Rank %d: Local k-mer count before exchange: %lu\n", rank, local_kmer_map.size());
-
     // Distribute k-mers among processes based on GetKmerOwner()
     std::vector<std::vector<KmerListEntry>> send_buffers(num_procs);
     for (const auto& entry : local_kmer_map) {
         int owner = GetKmerOwner(entry.first.kmer, num_procs);
-        if (entry.second <= 0) {
-            printf("Warning: Rank %d found local k-mer %llu with count = %d before sending!\n",
-                   rank, entry.first.kmer.GetHash(), entry.second);
-        }
         send_buffers[owner].emplace_back(entry.first.kmer, entry.second);
     }
 
@@ -165,7 +158,7 @@ std::unique_ptr<KmerList> count_kmer_mpi(const DnaBuffer& myreads) {
 
     MPI_Alltoall(send_sizes.data(), 1, MPI_INT, recv_sizes.data(), 1, MPI_INT, MPI_COMM_WORLD);
 
-    // preparocess data for MPI_Alltoallv
+    // preprocess data for MPI_Alltoallv
     std::vector<int> send_displs(num_procs, 0), recv_displs(num_procs, 0);
     int total_recv = std::accumulate(recv_sizes.begin(), recv_sizes.end(), 0);
     
@@ -177,63 +170,20 @@ std::unique_ptr<KmerList> count_kmer_mpi(const DnaBuffer& myreads) {
         send_data.insert(send_data.end(), send_buffers[i].begin(), send_buffers[i].end());
     }
 
-    // DEBUG print sample send data before communication
-    if (!send_data.empty()) {
-        printf("Rank %d: Sample k-mer before MPI_Alltoallv: (Kmer = %llu, Count = %d)\n",
-               rank, std::get<0>(send_data[0]).GetHash(), std::get<1>(send_data[0]));
-    }
-
     // call MPI_Alltoallv
     MPI_Alltoallv(send_data.data(), send_sizes.data(), send_displs.data(), MPI_BYTE,
                   recv_data.data(), recv_sizes.data(), recv_displs.data(), MPI_BYTE, MPI_COMM_WORLD);
 
-    // DEBUG Print number of received k-mers
-    printf("Rank %d: Received k-mers count: %lu\n", rank, recv_data.size());
-
-    // DEBUG print sample received data
-    if (!recv_data.empty()) {
-        printf("Rank %d: Sample k-mer received: (Kmer = %llu, Count = %d)\n",
-               rank, std::get<0>(recv_data[0]).GetHash(), std::get<1>(recv_data[0]));
-    }
-
-    // Merge received k-mers 
+    // merge received kmers
     std::unordered_map<KmerSeedStruct, int, KmerSeedHash> final_kmer_map;
-
-    // DEBUG Print received k-mers before merging
-    for (size_t i = 0; i < recv_data.size(); i++) {
-        printf("Rank %d: Raw received data %lu -> Kmer = %llu, Count = %d\n",
-            rank, i, std::get<0>(recv_data[i]).GetHash(), std::get<1>(recv_data[i]));
-    }
-
     for (const auto& entry : recv_data) {
-        TKmer kmer = std::get<0>(entry);
-        int count = std::get<1>(entry);
-
-        if (count <= 0) {
-            printf("Warning: Rank %d received k-mer %llu with invalid count = %d!\n",
-                rank, kmer.GetHash(), count);
-        }
-
-        final_kmer_map[kmer] += count;  // Merge k-mer counts
-    }
-
-    // DEBUG Check for invalid final k-mer counts
-    for (const auto& entry : final_kmer_map) {
-        if (entry.second <= 0) {
-            printf("Warning: Rank %d encountered k-mer %llu with count = %d after merging!\n",
-                rank, entry.first.kmer.GetHash(), entry.second);
-        }
+        final_kmer_map[std::get<0>(entry)] += std::get<1>(entry);
     }
 
     // Convert to list
     std::vector<KmerListEntry> final_kmers;
     for (const auto& entry : final_kmer_map) {
-        if (entry.second > 0) {
             final_kmers.emplace_back(entry.first.kmer, entry.second);
-        } else {
-            printf("Warning: Rank %d filtering out k-mer %llu with invalid count = %d before final output!\n",
-                   rank, entry.first.kmer.GetHash(), entry.second);
-        }
     }
 
     printf("Rank %d: Final K-mer count: %lu\n", rank, final_kmers.size());
