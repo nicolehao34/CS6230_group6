@@ -186,7 +186,5 @@ std::unique_ptr<KmerList> count_kmer_mpi(const DnaBuffer& myreads) {
             final_kmers.emplace_back(entry.first.kmer, entry.second);
     }
 
-    printf("Rank %d: Final K-mer count: %lu\n", rank, final_kmers.size());
-
     return std::make_unique<KmerList>(final_kmers.begin(), final_kmers.end());
 }
